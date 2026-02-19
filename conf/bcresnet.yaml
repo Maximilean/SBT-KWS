@@ -1,0 +1,138 @@
+model:
+  _target_: src.model.BCResNets
+  base_c: 92
+  n: [2, 2, 4, 4]
+  n_classes: ${len:${train_dataloader.dataset.idx_to_keyword}}
+
+train_dataloader:
+  _target_: torch.utils.data.DataLoader
+  num_workers: 8
+  batch_size: 512
+  prefetch_factor: 2
+  collate_fn: ${function:src.data.collator}
+  shuffle: True
+  dataset:
+    _target_: src.data.SpotterDataset
+    manifest_path: ???
+    idx_to_keyword:
+    - 'sber'
+    - 'joy'
+    - 'afina'
+    - 'salut'
+    - 'filler'
+    transforms:
+      # waveform-level augmentations (torch-audiomentations)
+      - _target_: src.data.TAWrapper
+        transform:
+          _target_: torch_audiomentations.Gain
+          min_gain_in_db: -6.0
+          max_gain_in_db: 6.0
+          p: 0.8
+          sample_rate: 16000
+          output_type: tensor
+      - _target_: src.data.TAWrapper
+        transform:
+          _target_: torch_audiomentations.AddColoredNoise
+          min_snr_in_db: 15.0
+          max_snr_in_db: 40.0
+          p: 0.5
+          sample_rate: 16000
+          output_type: tensor
+      - _target_: src.data.TAWrapper
+        transform:
+          _target_: torch_audiomentations.Shift
+          min_shift: -0.1
+          max_shift: 0.1
+          shift_unit: fraction
+          rollover: True
+          p: 0.4
+          sample_rate: 16000
+          output_type: tensor
+      # --- spectrogram + log-scale ---
+      - _target_: torchaudio.transforms.MelSpectrogram
+        sample_rate: 16000
+        n_fft: 512
+        win_length: 400
+        hop_length: 160
+        n_mels: 80
+      - _target_: src.data.SpecScaler
+      # SpecAugment applied twice for stronger regularisation
+      - _target_: torchaudio.transforms.FrequencyMasking
+        freq_mask_param: 15
+      - _target_: torchaudio.transforms.TimeMasking
+        time_mask_param: 15
+      - _target_: torchaudio.transforms.FrequencyMasking
+        freq_mask_param: 10
+      - _target_: torchaudio.transforms.TimeMasking
+        time_mask_param: 15
+
+val_dataloader:
+  _target_: torch.utils.data.DataLoader
+  num_workers: ${train_dataloader.num_workers}
+  batch_size: ${train_dataloader.batch_size}
+  prefetch_factor: ${train_dataloader.prefetch_factor}
+  collate_fn: ${train_dataloader.collate_fn}
+  shuffle: False
+  dataset:
+    _target_: src.data.SpotterDataset
+    manifest_path: ???
+    idx_to_keyword: ${train_dataloader.dataset.idx_to_keyword}
+    transforms:
+      - _target_: torchaudio.transforms.MelSpectrogram
+        sample_rate: 16000
+        n_fft: 512
+        win_length: 400
+        hop_length: 160
+        n_mels: 80
+      - _target_: src.data.SpecScaler
+
+predict_dataloader:
+  _target_: torch.utils.data.DataLoader
+  num_workers: 1
+  batch_size: ${val_dataloader.batch_size}
+  prefetch_factor: ${val_dataloader.prefetch_factor}
+  collate_fn: ${val_dataloader.collate_fn}
+  shuffle: False
+  dataset:
+    _target_: ${val_dataloader.dataset._target_}
+    manifest_path: ???
+    idx_to_keyword: ${val_dataloader.dataset.idx_to_keyword}
+    transforms: ${val_dataloader.dataset.transforms}
+    test: True
+
+trainer:
+  _target_: pytorch_lightning.Trainer
+  val_check_interval: 0.5
+  log_every_n_steps: 10
+  precision: bf16-mixed
+  accumulate_grad_batches: 1
+  gradient_clip_val: 1.0
+  accelerator: cuda
+  max_steps: 2300
+  devices: 1
+  callbacks:
+    - _target_: pytorch_lightning.callbacks.ModelCheckpoint
+      monitor: val/accuracy
+      mode: max
+      save_top_k: 3
+      save_last: True
+      filename: "best-step{step}-acc{val/accuracy:.4f}"
+    - _target_: pytorch_lightning.callbacks.ModelCheckpoint
+      every_n_train_steps: 5000
+      save_top_k: -1
+      filename: "periodic-step{step}"
+
+logger:
+  _target_: pytorch_lightning.loggers.TensorBoardLogger
+  save_dir: .
+
+optim:
+  _target_: torch.optim.AdamW
+  lr: 1e-3
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  T_max: ${trainer.max_steps}
+  eta_min: 1e-6
