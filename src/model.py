@@ -50,11 +50,11 @@ class TinyDSCNN(nn.Module):
         )
 
     def get_embedding(self, x: torch.Tensor) -> torch.Tensor:
-        x = x.unsqueeze(1)          # (B, mel, T) → (B, 1, mel, T)
+        x = x.unsqueeze(1)            
         x = self.stem(x)
         x = self.blocks(x)
-        x = self.classifier[0](x)   # AdaptiveAvgPool2d → (B, 48, 1, 1)
-        return self.classifier[1](x)  # Flatten → (B, 48)
+        x = self.classifier[0](x)    
+        return self.classifier[1](x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x.unsqueeze(1)
