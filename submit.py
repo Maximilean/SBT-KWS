@@ -18,10 +18,18 @@ def main(conf: omegaconf.DictConfig) -> None:
 
     module = KWS(conf)
     if conf.init_weights:
-        ckpt = torch.load(conf.init_weights, map_location="cpu")
-        module.load_state_dict(
-            {k: v for k, v in ckpt["state_dict"].items() if "total" not in k}
-        )
+        ckpt = torch.load(conf.init_weights, map_location="cpu", weights_only=False)
+        state_dict = ckpt["state_dict"]
+
+        if any(k.startswith("student.") for k in state_dict):
+            state_dict = {
+                k.replace("student.", "model."): v
+                for k, v in state_dict.items()
+                if k.startswith("student.") and "total" not in k
+            }
+        else:
+            state_dict = {k: v for k, v in state_dict.items() if "total" not in k}
+        module.load_state_dict(state_dict)
 
     logger = hydra.utils.instantiate(conf.logger)
     trainer = hydra.utils.instantiate(conf.trainer, logger=logger)

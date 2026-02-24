@@ -6,6 +6,63 @@ import torch.nn.functional as F
 from .subspectralnorm import SubSpectralNorm
 
 
+class _DSBlock(nn.Module):
+    def __init__(self, in_ch: int, out_ch: int, stride=(1, 1)):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_ch, in_ch, 3, stride=stride, padding=1,
+                      groups=in_ch, bias=False),
+            nn.BatchNorm2d(in_ch),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_ch, out_ch, 1, bias=False),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.block(x)
+
+
+class TinyDSCNN(nn.Module):
+    def __init__(self, n_classes: int = 5):
+        super().__init__()
+        self.stem = nn.Sequential(
+            nn.Conv2d(1, 8, kernel_size=3, stride=(4, 1), padding=1, bias=False),
+            nn.BatchNorm2d(8),
+            nn.ReLU(inplace=True),
+        )
+
+        self.blocks = nn.Sequential(
+            _DSBlock(8,  16, stride=(2, 2)),
+            _DSBlock(16, 24, stride=(2, 2)),
+            _DSBlock(24, 32, stride=(1, 1)),
+            _DSBlock(32, 48, stride=(1, 2)),
+            _DSBlock(48, 48, stride=(1, 1)),
+        )
+
+        self.classifier = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(48, 16),
+            nn.BatchNorm1d(16),
+            nn.ReLU(inplace=True),
+            nn.Linear(16, n_classes),
+        )
+
+    def get_embedding(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.unsqueeze(1)          # (B, mel, T) → (B, 1, mel, T)
+        x = self.stem(x)
+        x = self.blocks(x)
+        x = self.classifier[0](x)   # AdaptiveAvgPool2d → (B, 48, 1, 1)
+        return self.classifier[1](x)  # Flatten → (B, 48)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.unsqueeze(1)
+        x = self.stem(x)
+        x = self.blocks(x)
+        return self.classifier(x)
+
+
 class Conv1dNet(torch.nn.Module):
     def __init__(
         self,
@@ -233,5 +290,4 @@ class BCResNets(nn.Module):
             for j in range(num_modules):
                 x = self.BCBlocks[i][j](x)
         x = self.classifier(x)
-        x = x.view(-1, x.shape[1])
-        return F.log_softmax(x, dim=1)
+        return x.view(-1, x.shape[1])  # raw logits

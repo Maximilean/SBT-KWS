@@ -1,13 +1,23 @@
+# Distillation settings + hard-label loss
+distill:
+  teacher_ckpt: ???        
+  teacher_ckpt_2: null # optional second teacher checkpoint 
+  temperature: 4.0         
+  alpha: 0.1               
+  loss:
+    _target_: torch.nn.CrossEntropyLoss
+    label_smoothing: 0.0 
+
+# Student model
 model:
-  _target_: src.model.BCResNets
-  base_c: 96
-  n: [2, 2, 4, 4]
+  _target_: src.model.TinyDSCNN
   n_classes: ${len:${train_dataloader.dataset.idx_to_keyword}}
 
+# Data
 train_dataloader:
   _target_: torch.utils.data.DataLoader
   num_workers: 8
-  batch_size: 256
+  batch_size: 128
   prefetch_factor: 2
   collate_fn: ${function:src.data.collator}
   shuffle: True
@@ -21,7 +31,6 @@ train_dataloader:
     - 'salut'
     - 'filler'
     transforms:
-      # waveform-level augmentations (torch-audiomentations)
       - _target_: src.data.TAWrapper
         transform:
           _target_: torch_audiomentations.Gain
@@ -58,7 +67,6 @@ train_dataloader:
               p: 1.0
               sample_rate: 16000
               output_type: tensor
-      # spectrogram + log-scale
       - _target_: torchaudio.transforms.MelSpectrogram
         sample_rate: 16000
         n_fft: 512
@@ -66,15 +74,16 @@ train_dataloader:
         hop_length: 160
         n_mels: 80
       - _target_: src.data.SpecScaler
-      # SpecAugment applied several times for stronger regularisation
       - _target_: torchaudio.transforms.FrequencyMasking
-        freq_mask_param: 15 # 7
+        freq_mask_param: 15
       - _target_: torchaudio.transforms.TimeMasking
-        time_mask_param: 20 # 20
+        time_mask_param: 20
       - _target_: torchaudio.transforms.FrequencyMasking
-        freq_mask_param: 15 # 7
+        freq_mask_param: 15
       - _target_: torchaudio.transforms.TimeMasking
-        time_mask_param: 20 # 20
+        time_mask_param: 20
+      - _target_: torchaudio.transforms.FrequencyMasking
+        freq_mask_param: 10
 
 val_dataloader:
   _target_: torch.utils.data.DataLoader
@@ -110,6 +119,7 @@ predict_dataloader:
     transforms: ${val_dataloader.dataset.transforms}
     test: True
 
+# Trainer
 trainer:
   _target_: pytorch_lightning.Trainer
   val_check_interval: 0.5
@@ -118,7 +128,7 @@ trainer:
   accumulate_grad_batches: 1
   gradient_clip_val: 1.0
   accelerator: cuda
-  max_steps: 10000 # 20000
+  max_steps: 50000
   devices: 1
   callbacks:
     - _target_: pytorch_lightning.callbacks.ModelCheckpoint
@@ -126,32 +136,24 @@ trainer:
       mode: max
       save_top_k: 3
       save_last: True
-      filename: "best-step{step}-acc{val/accuracy:.4f}"
+      filename: "distill-step{step}-acc{val/accuracy:.4f}"
     - _target_: pytorch_lightning.callbacks.ModelCheckpoint
-      every_n_train_steps: 5000
+      every_n_train_steps: 10000
       save_top_k: -1
-      filename: "periodic-step{step}"
+      filename: "distill-periodic-step{step}"
 
 logger:
   _target_: pytorch_lightning.loggers.TensorBoardLogger
   save_dir: .
 
-loss:
-  _target_: torch.nn.CrossEntropyLoss
-  label_smoothing: 0.1
-
+# Optimizer (only for student only — teacher is frozen)
 optim:
   _target_: torch.optim.AdamW
-  lr: 1e-3
-  weight_decay: 0.001
+  lr: 2e-3
+  weight_decay: 0.01
   betas: [0.9, 0.999]
-  # _target_: torch.optim.SGD
-  # lr: 1e-1
-  # momentum: 0.9
-  # nesterov: True
-  # weight_decay: 1e-3
 
-warmup_steps: 1000 # 1000
+warmup_steps: 2000
 
 scheduler:
   _target_: torch.optim.lr_scheduler.CosineAnnealingLR

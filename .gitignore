@@ -42,6 +42,7 @@ lightning_logs/
 *.pt
 *.pth
 *.log
+*.csv
 
 # Pip artifact (e.g. from hydra-core==1.3.0)
 =*
